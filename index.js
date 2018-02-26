@@ -17,7 +17,7 @@ function checkForDefaults (defaults) {
  * @param {Config} defaults
  * @param {String} [configFilename]
  */
-module.exports = (robot, defaults = {success: "Congratulations! I'm merging this automagically.", failure: "Uh oh, something went wrong. I can't merge automatically."}, configFilename = 'merge.yml') => {
+module.exports = (robot, defaults = {success: "Congratulations! I'm merging this automagically.", failure: "I can't merge automatically. It could be because (1) there's a merge conflict, or (2) I'm waiting for statuses to pass."}, configFilename = 'merge.yml') => {
   checkForDefaults(defaults)
 
   const checkStatuses = async context => {
@@ -29,32 +29,44 @@ module.exports = (robot, defaults = {success: "Congratulations! I'm merging this
       config = defaults
     }
 
-    robot.log('Checking for mergability')
+    robot.log(`Checking for mergability of ${JSON.stringify(context.payload)}`)
 
     let pr = await context.github.pullRequests.get(context.issue())
     robot.log(`checking if it's mergeable`)
 
-    while ((pr.data.mergeable === null)) {
+    while (pr.data.mergeable === null) {
       pr = await context.github.pullRequests.get(context.issue())
     }
 
     if (pr.data.mergeable) {
-      robot.log('checks passed, merging automagically')
+      robot.log('it\'s mergeable, trying to merge')
 
       try {
-        await context.github.repos.merge(context.repo({
-          base: 'master',
-          head: context.payload.pull_request.head.ref
+        let combinedStatus = await context.github.repos.getCombinedStatusForRef(context.repo({
+          ref: 'master'
         }))
+
+        while (combinedStatus.data.state === 'pending') {
+          robot.log('refreshing status...')
+          combinedStatus = await context.github.repos.getCombinedStatusForRef(context.repo({
+            ref: 'master'
+          }))
+          robot.log(`got ${combinedStatus.data.state}`)
+        }
+
+        await context.github.pullRequests.merge(context.repo({
+          number: context.payload.number
+        }))
+
+        robot.log('was able to merge')
 
         return context.github.issues.createComment(context.repo({
           number: context.payload.number,
           body: config.success
-        }))  
+        }))
       } catch (err) {
-
+        robot.log('wasnt able to merge')
       }
-
     }
 
     await context.github.issues.createComment(context.repo({
